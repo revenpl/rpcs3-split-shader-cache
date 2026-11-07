@@ -10,9 +10,12 @@
 #include "Emu/Memory/vm.h"
 #include "Emu/RSX/Program/RSXVertexProgram.h"
 #include "Emu/RSX/Program/RSXFragmentProgram.h"
+#include "RSXCacheIO.h"
 #include "Overlays/Shaders/shader_loading_dialog.h"
 
 #include <chrono>
+#include <functional>
+#include <mutex>
 
 #include "util/sysinfo.hpp"
 #include "util/fnv_hash.hpp"
@@ -68,11 +71,58 @@ namespace rsx
 		};
 
 		std::string version_prefix;
+		std::string split_version_prefix;
 		std::string root_path;
 		std::string pipeline_class_name;
 		lf_fifo<std::unique_ptr<u8[]>, 100> fragment_program_data;
 
 		backend_storage& m_storage;
+
+		// Split shader cache (g_cfg.video.split_shader_cache):
+		// make_props — the backend's decode_rsx_state_offline (live state + fp_ctrl -> pipeline_props)
+		// extract_live — the inverse (pipeline_props -> live state), used at store()/import time
+		// device_key — per-GPU folder name (e.g. "10DE_2206" for NVIDIA / AD102)
+		using make_props_t = std::function<pipeline_storage_type(const rsx_live_state&, u32)>;
+		using extract_live_t = std::function<rsx_live_state(const pipeline_storage_type&)>;
+
+		make_props_t m_make_props;
+		extract_live_t m_extract_live;
+		std::string device_key;
+
+		std::string manifest_file_path() const
+		{
+			return root_path + "/pipelines/" + pipeline_class_name + "/" + split_version_prefix + "/pipelines.bin";
+		}
+
+		std::string device_file_path() const
+		{
+			return root_path + "/pipelines/" + pipeline_class_name + "/" + split_version_prefix + "/device/" + device_key + "/props.bin";
+		}
+
+		// I6: one-time import of legacy per-pipeline files into the split cache.
+		// The per-file split loop lives in rsx::cache_files::import_legacy_records (RSXCacheIO.h)
+		// so the decode-equivalence test can exercise the same code path.
+		std::vector<rsx::cache_files::manifest_record> import_legacy(const std::string& directory_path)
+		{
+			std::vector<rsx::cache_files::manifest_record> manifest;
+			std::vector<rsx::cache_files::device_entry<pipeline_storage_type>> devices;
+
+			if (!rsx::cache_files::import_legacy_records(directory_path, m_extract_live, devices, manifest))
+			{
+				return {};
+			}
+
+			const std::string manifest_path = manifest_file_path();
+			fs::create_path(manifest_path.substr(0, manifest_path.rfind('/')));
+			rsx::cache_files::write_manifest(manifest_path, manifest);
+
+			const std::string device_path = device_file_path();
+			fs::create_path(device_path.substr(0, device_path.rfind('/')));
+			rsx::cache_files::write_device<pipeline_storage_type>(device_path, devices);
+
+			rsx_log.success("Split cache: imported %u legacy pipeline record(s)", manifest.size());
+			return manifest;
+		}
 
 		static std::string get_message(u32 index, u32 processed, u32 entry_count)
 		{
@@ -122,12 +172,73 @@ namespace rsx
 
 					unpacked[unpacked.push_begin()] = std::move(entry);
 				}
+			// Do not account for an extra shader that was never processed
+			processed--;
+			};
+
+			await_workers(nb_workers, 0, shader_load_worker, processed, entry_count, dlg);
+			}
+
+			// Split-cache load worker: raw vp/fp come from the shared raw/ dir,
+			// pipeline properties from the per-device file (or make_props regeneration).
+			void load_shaders_split(uint nb_workers, unpacked_type& unpacked, const std::vector<rsx::cache_files::manifest_record>& manifest,
+				const std::vector<pipeline_storage_type>& pipelines, u32 entry_count, shader_loading_dialog* dlg)
+			{
+			atomic_t<u32> processed(0);
+
+			std::function<void(u32)> shader_load_worker = [&](u32 stop_at)
+			{
+				u32 pos;
+				while (((pos = processed++) < stop_at) && !Emu.IsStopped())
+				{
+					// Non-const local copy (pack_bitset takes non-const storage; 224B POD, cheap)
+					rsx::cache_files::pipeline_core core = manifest[pos].core;
+
+					RSXVertexProgram vp = load_vp_raw(core.vertex_program_hash);
+					if (vp.data.empty())
+						continue;
+
+					// Reconstruct program state from the portable core (mirrors unpack())
+					vp.ctrl = core.vp_ctrl0;
+					vp.output_mask = core.vp_ctrl1;
+					vp.texture_state.texture_dimensions = core.vp_texture_dimensions;
+					vp.texture_state.multisampled_textures = core.vp_multisampled_textures;
+					vp.base_address = core.vp_base_address;
+					vp.entry = core.vp_entry;
+					pack_bitset<max_vertex_program_instructions>(vp.instruction_mask, core.vp_instruction_mask);
+					for (u8 index = 0; index < 32; ++index)
+					{
+						const auto address = core.vp_jump_table[index];
+						if (address == u16{umax})
+						{
+							// End of list marker
+							break;
+						}
+						vp.jump_table.emplace(address);
+					}
+
+					RSXFragmentProgram fp = load_fp_raw(core.fragment_program_hash);
+					if (!fp.ucode_length)
+						continue;
+
+					fp.ctrl = core.fp_ctrl;
+					fp.texture_state.texture_dimensions = core.fp_texture_dimensions;
+					fp.texture_state.shadow_textures = core.fp_shadow_textures;
+					fp.texture_state.redirected_textures = core.fp_redirected_textures;
+					fp.texture_state.multisampled_textures = core.fp_multisampled_textures;
+					fp.texcoord_control_mask = core.fp_texcoord_control;
+					fp.two_sided_lighting = !!(core.fp_lighting_flags & 0x1);
+					fp.mrt_buffers_count = core.fp_mrt_count;
+
+					m_storage.preload_programs(nullptr, vp, fp);
+					unpacked[unpacked.push_begin()] = std::make_tuple(pipelines[pos], std::move(vp), std::move(fp));
+				}
 				// Do not account for an extra shader that was never processed
 				processed--;
 			};
 
 			await_workers(nb_workers, 0, shader_load_worker, processed, entry_count, dlg);
-		}
+			}
 
 		template <typename... Args>
 		void compile_shaders(uint nb_workers, unpacked_type& unpacked, u32 entry_count, shader_loading_dialog* dlg, steady_clock::time_point skip_after, Args&&... args)
@@ -223,10 +334,15 @@ namespace rsx
 
 	public:
 
-		shaders_cache(backend_storage& storage, std::string pipeline_class, std::string version_prefix_str = "v1")
-			: version_prefix(std::move(version_prefix_str))
-			, pipeline_class_name(std::move(pipeline_class))
-			, m_storage(storage)
+		shaders_cache(backend_storage& storage, std::string pipeline_class, std::string version_prefix_str,
+				make_props_t make_props, extract_live_t extract_live, std::string device_key)
+				: version_prefix(std::move(version_prefix_str))
+				, split_version_prefix("v1.96")
+				, pipeline_class_name(std::move(pipeline_class))
+				, m_storage(storage)
+				, m_make_props(std::move(make_props))
+				, m_extract_live(std::move(extract_live))
+				, device_key(std::move(device_key))
 		{
 			if (!g_cfg.video.disable_on_disk_shader_cache)
 			{
@@ -245,6 +361,117 @@ namespace rsx
 				return;
 			}
 
+			if (!g_cfg.video.split_shader_cache)
+			{
+				load_legacy(dlg, std::forward<Args>(args)...);
+				return;
+			}
+
+			const std::string directory_path = root_path + "/pipelines/" + pipeline_class_name + "/" + version_prefix;
+
+			// I6: no (valid) manifest yet -> import the legacy per-pipeline files, once
+			std::vector<rsx::cache_files::manifest_record> manifest;
+			if (!rsx::cache_files::read_manifest(manifest_file_path(), manifest))
+			{
+				manifest = import_legacy(directory_path);
+			}
+
+			u32 entry_count = ::size32(manifest);
+			if (!entry_count)
+			{
+				return;
+			}
+
+			// This GPU's pipeline properties (may be empty on first import)
+			std::vector<rsx::cache_files::device_entry<pipeline_storage_type>> devices;
+			rsx::cache_files::read_device<pipeline_storage_type>(device_file_path(), devices);
+
+			rsx::unordered_map<rsx::cache_files::entry_key, rsx::cache_files::device_entry<pipeline_storage_type>, rsx::cache_files::entry_key_hash> device_map;
+			for (auto& e : devices)
+			{
+				device_map.emplace(rsx::cache_files::make_entry_key(e.vp, e.fp, e.state_hash), std::move(e));
+			}
+
+			// Resolve each entry's pipeline properties up front (single-threaded):
+			// map hit -> cached props; miss -> regenerate from the portable live state.
+			std::vector<pipeline_storage_type> pipelines(manifest.size());
+			u32 generated = 0;
+			for (usz pos = 0; pos < manifest.size(); ++pos)
+			{
+				const auto& rec = manifest[pos];
+				const rsx::cache_files::entry_key key =
+					rsx::cache_files::make_entry_key(rec.core.vertex_program_hash, rec.core.fragment_program_hash, rsx::cache_files::core_state_hash(rec.core));
+
+				if (const auto it = device_map.find(key); it != device_map.end())
+				{
+					pipelines[pos] = it->second.props;
+					continue;
+				}
+
+				pipelines[pos] = m_make_props(rec.live, rec.core.fp_ctrl);
+				device_map.emplace(key, rsx::cache_files::device_entry<pipeline_storage_type>
+				{
+					rec.core.vertex_program_hash,
+					rec.core.fragment_program_hash,
+					static_cast<u64>(rsx::cache_files::core_state_hash(rec.core)),
+					rec.core.pipeline_storage_hash,
+					pipelines[pos]
+				});
+				generated++;
+			}
+
+			// Progress dialog
+			std::unique_ptr<shader_loading_dialog> fallback_dlg;
+			if (!dlg)
+			{
+				fallback_dlg = std::make_unique<shader_loading_dialog>();
+				dlg = fallback_dlg.get();
+			}
+
+			dlg->create("Preloading cached shaders from disk.\nPlease wait...", "Shader Compilation");
+			dlg->set_limit(0, entry_count);
+			dlg->set_limit(1, entry_count);
+			dlg->update_msg(0, get_message(0, 0, entry_count));
+			dlg->update_msg(1, get_message(1, 0, entry_count));
+
+			// Preload everything needed to compile the shaders
+			unpacked_type unpacked;
+			uint nb_workers = g_cfg.video.renderer == video_renderer::vulkan ? utils::get_thread_count() : 1;
+
+			load_shaders_split(nb_workers, unpacked, manifest, pipelines, entry_count, dlg);
+
+			// Account for any invalid entries
+			entry_count = unpacked.size();
+
+			// I7: persist the records we generated for this device
+			if (generated)
+			{
+				std::vector<rsx::cache_files::device_entry<pipeline_storage_type>> devices_out;
+				devices_out.reserve(device_map.size());
+				for (auto& e : device_map)
+					devices_out.push_back(std::move(e.second));
+
+				const std::string device_path = device_file_path();
+				fs::create_path(device_path.substr(0, device_path.rfind('/')));
+				rsx::cache_files::write_device<pipeline_storage_type>(device_path, devices_out);
+				rsx_log.success("Split cache: regenerated %u pipeline record(s) for this device", generated);
+			}
+
+			// The interpreter covers any pipelines we did not link, so the user may skip the linking step after a while
+			const auto skip_after = g_cfg.video.shadermode == shader_mode::async_with_interpreter
+				? steady_clock::now() + 60s
+				: steady_clock::time_point::max();
+
+			compile_shaders(nb_workers, unpacked, entry_count, dlg, skip_after, std::forward<Args>(args)...);
+
+			dlg->refresh();
+			dlg->close();
+		}
+
+		// Legacy (pre-split) load path — unchanged behaviour, kept behind the config flag
+		template <typename... Args>
+		void load_legacy(shader_loading_dialog* dlg, Args&& ...args)
+		{
 			std::string directory_path = root_path + "/pipelines/" + pipeline_class_name + "/" + version_prefix;
 
 			fs::dir root = fs::dir(directory_path);
@@ -356,9 +583,87 @@ namespace rsx
 			};
 			const usz state_hash = rpcs3::hash_array(state_params);
 
-			const std::string pipeline_file_name = fmt::format("%llX+%llX+%llX+%llX.bin", data.vertex_program_hash, data.fragment_program_hash, data.pipeline_storage_hash, state_hash);
-			const std::string pipeline_path = root_path + "/pipelines/" + pipeline_class_name + "/" + version_prefix + "/" + pipeline_file_name;
-			fs::write_file(pipeline_path, fs::rewrite, &data, sizeof(data));
+			if (g_cfg.video.split_shader_cache)
+			{
+				// 1) Portable manifest: append if (vp, fp, state) is new
+				std::vector<rsx::cache_files::manifest_record> manifest;
+				const std::string manifest_path = manifest_file_path();
+				if (!rsx::cache_files::read_manifest(manifest_path, manifest))
+				{
+					manifest.clear();
+				}
+
+				bool found = false;
+				bool manifest_dirty = false;
+				for (auto& r : manifest)
+				{
+					if (r.core.vertex_program_hash == data.vertex_program_hash &&
+						r.core.fragment_program_hash == data.fragment_program_hash &&
+						static_cast<u64>(rsx::cache_files::core_state_hash(r.core)) == static_cast<u64>(state_hash))
+					{
+						// Refresh the portable live state on upsert too, so cross-GPU
+						// regeneration never decodes a stale record.
+						r.live = m_extract_live(pipeline);
+						found = true;
+						manifest_dirty = true;
+						break;
+					}
+				}
+
+				if (!found)
+				{
+					rsx::cache_files::manifest_record r{};
+					std::memcpy(&r.core, &data, sizeof(r.core)); // first 224B — static_assert'd identical layout
+					r.live = m_extract_live(pipeline);
+					manifest.push_back(std::move(r));
+					manifest_dirty = true;
+				}
+
+				if (manifest_dirty)
+				{
+					fs::create_path(manifest_path.substr(0, manifest_path.rfind('/')));
+					rsx::cache_files::write_manifest(manifest_path, manifest);
+				}
+
+				// 2) This GPU's props: upsert by (vp, fp, state)
+				std::vector<rsx::cache_files::device_entry<pipeline_storage_type>> devices;
+				const std::string device_path = device_file_path();
+				if (!rsx::cache_files::read_device<pipeline_storage_type>(device_path, devices))
+				{
+					devices.clear();
+				}
+
+				bool d_found = false;
+				for (auto& e : devices)
+				{
+					if (e.vp == data.vertex_program_hash && e.fp == data.fragment_program_hash && e.state_hash == static_cast<u64>(state_hash))
+					{
+						e.storage_hash = data.pipeline_storage_hash;
+						e.props = pipeline;
+						d_found = true;
+						break;
+					}
+				}
+				if (!d_found)
+				{
+					rsx::cache_files::device_entry<pipeline_storage_type> e{};
+					e.vp = data.vertex_program_hash;
+					e.fp = data.fragment_program_hash;
+					e.state_hash = static_cast<u64>(state_hash);
+					e.storage_hash = data.pipeline_storage_hash;
+					e.props = pipeline;
+					devices.push_back(std::move(e));
+				}
+
+				fs::create_path(device_path.substr(0, device_path.rfind('/')));
+				rsx::cache_files::write_device<pipeline_storage_type>(device_path, devices);
+			}
+			else
+			{
+				const std::string pipeline_file_name = fmt::format("%llX+%llX+%llX+%llX.bin", data.vertex_program_hash, data.fragment_program_hash, data.pipeline_storage_hash, state_hash);
+				const std::string pipeline_path = root_path + "/pipelines/" + pipeline_class_name + "/" + version_prefix + "/" + pipeline_file_name;
+				fs::write_file(pipeline_path, fs::rewrite, &data, sizeof(data));
+			}
 		}
 
 		RSXVertexProgram load_vp_raw(u64 program_hash) const

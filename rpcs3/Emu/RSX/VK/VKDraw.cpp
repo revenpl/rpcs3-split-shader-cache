@@ -5,6 +5,7 @@
 
 #include "VKAsyncScheduler.h"
 #include "VKGSRender.h"
+#include "VKShaderState.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/chip_class.h"
 #include <vulkan/vulkan_core.h>
@@ -26,23 +27,6 @@ namespace vk
 		case rsx::texture_dimension_extended::texture_dimension_3d:
 			return VK_IMAGE_VIEW_TYPE_3D;
 		default: fmt::throw_exception("Unreachable");
-		}
-	}
-
-	VkCompareOp get_compare_func(rsx::comparison_function op, bool reverse_direction = false)
-	{
-		switch (op)
-		{
-		case rsx::comparison_function::never: return VK_COMPARE_OP_NEVER;
-		case rsx::comparison_function::greater: return reverse_direction ? VK_COMPARE_OP_LESS: VK_COMPARE_OP_GREATER;
-		case rsx::comparison_function::less: return reverse_direction ? VK_COMPARE_OP_GREATER: VK_COMPARE_OP_LESS;
-		case rsx::comparison_function::less_or_equal: return reverse_direction ? VK_COMPARE_OP_GREATER_OR_EQUAL: VK_COMPARE_OP_LESS_OR_EQUAL;
-		case rsx::comparison_function::greater_or_equal: return reverse_direction ? VK_COMPARE_OP_LESS_OR_EQUAL: VK_COMPARE_OP_GREATER_OR_EQUAL;
-		case rsx::comparison_function::equal: return VK_COMPARE_OP_EQUAL;
-		case rsx::comparison_function::not_equal: return VK_COMPARE_OP_NOT_EQUAL;
-		case rsx::comparison_function::always: return VK_COMPARE_OP_ALWAYS;
-		default:
-			fmt::throw_exception("Unknown compare op: 0x%x", static_cast<u32>(op));
 		}
 	}
 

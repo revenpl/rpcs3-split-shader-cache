@@ -11,6 +11,7 @@
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
 #include "VKResourceManager.h"
+#include "VKShaderState.h"
 
 #include "vkutils/buffer_object.h"
 #include "vkutils/scratch.h"
@@ -29,7 +30,6 @@
 
 namespace vk
 {
-	VkCompareOp get_compare_func(rsx::comparison_function op, bool reverse_direction = false);
 
 	void on_device_lost()
 	{
@@ -115,118 +115,6 @@ namespace vk
 		}
 	}
 
-	VkLogicOp get_logic_op(rsx::logic_op op)
-	{
-		switch (op)
-		{
-		case rsx::logic_op::logic_clear: return VK_LOGIC_OP_CLEAR;
-		case rsx::logic_op::logic_and: return VK_LOGIC_OP_AND;
-		case rsx::logic_op::logic_and_reverse: return VK_LOGIC_OP_AND_REVERSE;
-		case rsx::logic_op::logic_copy: return VK_LOGIC_OP_COPY;
-		case rsx::logic_op::logic_and_inverted: return VK_LOGIC_OP_AND_INVERTED;
-		case rsx::logic_op::logic_noop: return VK_LOGIC_OP_NO_OP;
-		case rsx::logic_op::logic_xor: return VK_LOGIC_OP_XOR;
-		case rsx::logic_op::logic_or : return VK_LOGIC_OP_OR;
-		case rsx::logic_op::logic_nor: return VK_LOGIC_OP_NOR;
-		case rsx::logic_op::logic_equiv: return VK_LOGIC_OP_EQUIVALENT;
-		case rsx::logic_op::logic_invert: return VK_LOGIC_OP_INVERT;
-		case rsx::logic_op::logic_or_reverse: return VK_LOGIC_OP_OR_REVERSE;
-		case rsx::logic_op::logic_copy_inverted: return VK_LOGIC_OP_COPY_INVERTED;
-		case rsx::logic_op::logic_or_inverted: return VK_LOGIC_OP_OR_INVERTED;
-		case rsx::logic_op::logic_nand: return VK_LOGIC_OP_NAND;
-		case rsx::logic_op::logic_set: return VK_LOGIC_OP_SET;
-		default:
-			fmt::throw_exception("Unknown logic op 0x%x", static_cast<u32>(op));
-		}
-	}
-
-	VkBlendFactor get_blend_factor(rsx::blend_factor factor)
-	{
-		switch (factor)
-		{
-		case rsx::blend_factor::one: return VK_BLEND_FACTOR_ONE;
-		case rsx::blend_factor::zero: return VK_BLEND_FACTOR_ZERO;
-		case rsx::blend_factor::src_alpha: return VK_BLEND_FACTOR_SRC_ALPHA;
-		case rsx::blend_factor::dst_alpha: return VK_BLEND_FACTOR_DST_ALPHA;
-		case rsx::blend_factor::src_color: return VK_BLEND_FACTOR_SRC_COLOR;
-		case rsx::blend_factor::dst_color: return VK_BLEND_FACTOR_DST_COLOR;
-		case rsx::blend_factor::constant_color: return VK_BLEND_FACTOR_CONSTANT_COLOR;
-		case rsx::blend_factor::constant_alpha: return VK_BLEND_FACTOR_CONSTANT_ALPHA;
-		case rsx::blend_factor::one_minus_src_color: return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
-		case rsx::blend_factor::one_minus_dst_color: return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
-		case rsx::blend_factor::one_minus_src_alpha: return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-		case rsx::blend_factor::one_minus_dst_alpha: return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
-		case rsx::blend_factor::one_minus_constant_alpha: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
-		case rsx::blend_factor::one_minus_constant_color: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
-		case rsx::blend_factor::src_alpha_saturate: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
-		default:
-			fmt::throw_exception("Unknown blend factor 0x%x", static_cast<u32>(factor));
-		}
-	}
-
-	VkBlendOp get_blend_op(rsx::blend_equation op)
-	{
-		switch (op)
-		{
-		case rsx::blend_equation::add_signed:
-			rsx_log.error("blend equation add_signed used. Emulating using FUNC_ADD");
-			[[fallthrough]];
-		case rsx::blend_equation::add: return VK_BLEND_OP_ADD;
-		case rsx::blend_equation::reverse_add_signed:
-			rsx_log.error("blend equation reverse_add_signed used. Emulating using FUNC_ADD");
-			return VK_BLEND_OP_ADD;
-		case rsx::blend_equation::subtract: return VK_BLEND_OP_SUBTRACT;
-		case rsx::blend_equation::reverse_subtract_signed:
-			rsx_log.error("blend equation reverse_subtract_signed used. Emulating using FUNC_REVERSE_SUBTRACT");
-			[[fallthrough]];
-		case rsx::blend_equation::reverse_subtract: return VK_BLEND_OP_REVERSE_SUBTRACT;
-		case rsx::blend_equation::min: return VK_BLEND_OP_MIN;
-		case rsx::blend_equation::max: return VK_BLEND_OP_MAX;
-		default:
-			fmt::throw_exception("Unknown blend op: 0x%x", static_cast<u32>(op));
-		}
-	}
-
-	VkStencilOp get_stencil_op(rsx::stencil_op op)
-	{
-		switch (op)
-		{
-		case rsx::stencil_op::keep: return VK_STENCIL_OP_KEEP;
-		case rsx::stencil_op::zero: return VK_STENCIL_OP_ZERO;
-		case rsx::stencil_op::replace: return VK_STENCIL_OP_REPLACE;
-		case rsx::stencil_op::incr: return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
-		case rsx::stencil_op::decr: return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
-		case rsx::stencil_op::invert: return VK_STENCIL_OP_INVERT;
-		case rsx::stencil_op::incr_wrap: return VK_STENCIL_OP_INCREMENT_AND_WRAP;
-		case rsx::stencil_op::decr_wrap: return VK_STENCIL_OP_DECREMENT_AND_WRAP;
-		default:
-			fmt::throw_exception("Unknown stencil op: 0x%x", static_cast<u32>(op));
-		}
-	}
-
-	VkFrontFace get_front_face(rsx::front_face ffv)
-	{
-		switch (ffv)
-		{
-		case rsx::front_face::cw: return VK_FRONT_FACE_CLOCKWISE;
-		case rsx::front_face::ccw: return VK_FRONT_FACE_COUNTER_CLOCKWISE;
-		default:
-			fmt::throw_exception("Unknown front face value: 0x%x", static_cast<u32>(ffv));
-		}
-	}
-
-	VkCullModeFlags get_cull_face(rsx::cull_face cfv)
-	{
-		switch (cfv)
-		{
-		case rsx::cull_face::back: return VK_CULL_MODE_BACK_BIT;
-		case rsx::cull_face::front: return VK_CULL_MODE_FRONT_BIT;
-		case rsx::cull_face::front_and_back: return VK_CULL_MODE_FRONT_AND_BACK;
-		default:
-			fmt::throw_exception("Unknown cull face value: 0x%x", static_cast<u32>(cfv));
-		}
-	}
-
 	struct vertex_input_assembly_state
 	{
 		VkPrimitiveTopology primitive;
@@ -252,153 +140,73 @@ namespace vk
 		return state;
 	}
 
-	// TODO: This should be deprecated soon (kd)
-	vk::pipeline_props decode_rsx_state(
-		const rsx::context* ctx,
-		const vertex_input_assembly_state& vertex_input,
-		vk::render_target* ds,
-		const rsx::backend_configuration& m_config,
-		u8 num_draw_buffers,
-		u8 num_rasterization_samples,
-		bool depth_bounds_support,
-		bool force_disable_blending,
-		bool force_depth_clamp)
+	// Captures the live draw state that vk::decode_rsx_state() reads from method registers.
+	// Exact mirror of vk::decode_rsx_state_offline() (VKShaderState.h): for the same inputs,
+	// decode_rsx_state_offline(capture_live_state(...)) == decode_rsx_state(...) —
+	// verified by tools/shader_cache_tests/test_decode_equivalence.cpp.
+	rsx::rsx_live_state capture_live_state(const rsx::context* ctx, const vertex_input_assembly_state& vertex_input,
+			u8 num_draw_buffers, u64 renderpass_key)
 	{
-		vk::pipeline_props properties{};
+		const auto r = REGS(ctx);
 
-		const auto& raster = ctx->draw_state.raster;
-		const auto& depth_stencil = ctx->draw_state.depth_stencil;
-		const auto& blend = ctx->draw_state.blend;
-		const auto& multisample = ctx->draw_state.multisample;
+		rsx::rsx_live_state s{};
+		s.primitive = static_cast<u32>(vertex_input.primitive);
+		s.primitive_restart = vertex_input.restart_index_enabled ? 1 : 0;
 
-		// Input assembly
-		properties.state.set_primitive_type(vertex_input.primitive);
-		properties.state.enable_primitive_restart(vertex_input.restart_index_enabled);
+		s.front_face_mode = static_cast<u16>(r->front_face_mode());
+		s.depth_clamp_enabled = r->depth_clamp_enabled() ? 1 : 0;
+		s.depth_clip_enabled = r->depth_clip_enabled() ? 1 : 0;
 
-		// Rasterizer state
-		properties.state.set_attachment_count(num_draw_buffers);
-		properties.state.set_front_face(vk::get_front_face(raster.front_face_mode));
-		if (!force_depth_clamp) [[ likely ]]
+		s.depth_test_enabled = r->depth_test_enabled() ? 1 : 0;
+		s.depth_write_enabled = r->depth_write_enabled() ? 1 : 0;
+		s.depth_func = static_cast<u16>(r->depth_func());
+
+		s.cull_face_enabled = r->cull_face_enabled() ? 1 : 0;
+		s.cull_face_mode = static_cast<u16>(r->cull_face_mode());
+
+		s.surface_color = static_cast<u8>(r->surface_color());
+		s.num_draw_buffers = num_draw_buffers;
+		for (uint index = 0; index < num_draw_buffers && index < 4; ++index)
 		{
-			properties.state.enable_depth_clamp(depth_stencil.depth_clamp_enabled || !depth_stencil.depth_clip_enabled);
-		}
-		else
-		{
-			// Depth clip and clamp are emulated in the fragment shader
-			properties.state.enable_depth_clamp(true);
-		}
-		properties.state.enable_depth_bias(true);
-		properties.state.enable_depth_bounds_test(depth_bounds_support);
-
-		if (depth_stencil.depth_test_enabled)
-		{
-			//NOTE: Like stencil, depth write is meaningless without depth test
-			properties.state.set_depth_mask(depth_stencil.depth_write_enabled);
-			properties.state.enable_depth_test(vk::get_compare_func(depth_stencil.depth_func));
+			u8 bits = 0;
+			if (r->color_mask_r(index)) bits |= 1;
+			if (r->color_mask_g(index)) bits |= 2;
+			if (r->color_mask_b(index)) bits |= 4;
+			if (r->color_mask_a(index)) bits |= 8;
+			s.color_mask[index] = bits;
 		}
 
-		if (raster.cull_face_enabled)
-		{
-			properties.state.enable_cull_face(vk::get_cull_face(raster.cull_face_mode));
-		}
+		s.logic_op_enabled = r->logic_op_enabled() ? 1 : 0;
+		s.logic_operation = static_cast<u16>(r->logic_operation());
 
-		for (uint index = 0; index < num_draw_buffers; ++index)
-		{
-			const auto& color_mask = blend.color_mask[index];
-			properties.state.set_color_mask(index, color_mask.r, color_mask.g, color_mask.b, color_mask.a);
-		}
+		s.blend_enabled_mask = r->blend_enabled_mask();
+		s.blend_func_sfactor_rgb = static_cast<u16>(r->blend_func_sfactor_rgb());
+		s.blend_func_sfactor_a = static_cast<u16>(r->blend_func_sfactor_a());
+		s.blend_func_dfactor_rgb = static_cast<u16>(r->blend_func_dfactor_rgb());
+		s.blend_func_dfactor_a = static_cast<u16>(r->blend_func_dfactor_a());
+		s.blend_equation_rgb = static_cast<u16>(r->blend_equation_rgb());
+		s.blend_equation_a = static_cast<u16>(r->blend_equation_a());
 
-		// LogicOp and Blend are mutually exclusive. If both are enabled, LogicOp takes precedence.
-		if (blend.logic_op_enabled)
-		{
-			properties.state.enable_logic_op(vk::get_logic_op(blend.logic_operation));
-		}
-		else if (!force_disable_blending)
-		{
-			VkBlendFactor sfactor_rgb, sfactor_a, dfactor_rgb, dfactor_a;
-			VkBlendOp equation_rgb, equation_a;
+		s.stencil_test_enabled = r->stencil_test_enabled() ? 1 : 0;
+		s.two_sided_stencil = r->two_sided_stencil_test_enabled() ? 1 : 0;
+		s.stencil_op_fail = static_cast<u16>(r->stencil_op_fail());
+		s.stencil_op_zfail = static_cast<u16>(r->stencil_op_zfail());
+		s.stencil_op_zpass = static_cast<u16>(r->stencil_op_zpass());
+		s.stencil_func = static_cast<u16>(r->stencil_func());
+		s.back_stencil_op_fail = static_cast<u16>(r->back_stencil_op_fail());
+		s.back_stencil_op_zfail = static_cast<u16>(r->back_stencil_op_zfail());
+		s.back_stencil_op_zpass = static_cast<u16>(r->back_stencil_op_zpass());
+		s.back_stencil_func = static_cast<u16>(r->back_stencil_func());
 
-			if (const auto blend_enabled = blend.enable_mask)
-			{
-				sfactor_rgb = vk::get_blend_factor(blend.sfactor_rgb);
-				sfactor_a = vk::get_blend_factor(blend.sfactor_a);
-				dfactor_rgb = vk::get_blend_factor(blend.dfactor_rgb);
-				dfactor_a = vk::get_blend_factor(blend.dfactor_a);
-				equation_rgb = vk::get_blend_op(blend.equation_rgb);
-				equation_a = vk::get_blend_op(blend.equation_a);
+		s.msaa_enabled = r->msaa_enabled() ? 1 : 0;
+		s.msaa_sample_mask = static_cast<u16>(r->msaa_sample_mask());
+		s.msaa_alpha_to_one = r->msaa_alpha_to_one_enabled() ? 1 : 0;
+		s.msaa_alpha_to_coverage = r->msaa_alpha_to_coverage_enabled() ? 1 : 0;
 
-				for (u8 idx = 0; idx < num_draw_buffers; ++idx)
-				{
-					if (blend_enabled & (1u << idx))
-					{
-						properties.state.enable_blend(idx, sfactor_rgb, sfactor_a, dfactor_rgb, dfactor_a, equation_rgb, equation_a);
-					}
-				}
-			}
-		}
-
-		if (depth_stencil.stencil_test_enabled)
-		{
-			if (!depth_stencil.two_sided_stencil_test_enabled)
-			{
-				properties.state.enable_stencil_test(
-					vk::get_stencil_op(depth_stencil.front.op_fail),
-					vk::get_stencil_op(depth_stencil.front.op_zfail),
-					vk::get_stencil_op(depth_stencil.front.op_zpass),
-					vk::get_compare_func(depth_stencil.front.func),
-					0xFF, 0xFF); //write mask, func_mask, ref are dynamic
-			}
-			else
-			{
-				properties.state.enable_stencil_test_separate(0,
-					vk::get_stencil_op(depth_stencil.front.op_fail),
-					vk::get_stencil_op(depth_stencil.front.op_zfail),
-					vk::get_stencil_op(depth_stencil.front.op_zpass),
-					vk::get_compare_func(depth_stencil.front.func),
-					0xFF, 0xFF); //write mask, func_mask, ref are dynamic
-
-				properties.state.enable_stencil_test_separate(1,
-					vk::get_stencil_op(depth_stencil.back.op_fail),
-					vk::get_stencil_op(depth_stencil.back.op_zfail),
-					vk::get_stencil_op(depth_stencil.back.op_zpass),
-					vk::get_compare_func(depth_stencil.back.func),
-					0xFF, 0xFF); //write mask, func_mask, ref are dynamic
-			}
-
-			if (ds && ds->samples() > 1 && !(ds->stencil_init_flags & 0xFF00))
-			{
-				if (properties.state.ds.front.failOp != VK_STENCIL_OP_KEEP ||
-					properties.state.ds.front.depthFailOp != VK_STENCIL_OP_KEEP ||
-					properties.state.ds.front.passOp != VK_STENCIL_OP_KEEP ||
-					properties.state.ds.back.failOp != VK_STENCIL_OP_KEEP ||
-					properties.state.ds.back.depthFailOp != VK_STENCIL_OP_KEEP ||
-					properties.state.ds.back.passOp != VK_STENCIL_OP_KEEP)
-				{
-					// Toggle bit 9 to signal require full bit-wise transfer
-					ds->stencil_init_flags |= (1 << 8);
-				}
-			}
-		}
-
-		if (m_config.supports_hw_a2c || num_rasterization_samples > 1)
-		{
-			const bool alpha_to_one_enable = multisample.alpha_to_one_enabled && m_config.supports_hw_a2one;
-
-			properties.state.set_multisample_state(
-				num_rasterization_samples,
-				multisample.sample_mask,
-				multisample.msaa_enabled,
-				multisample.alpha_to_coverage_enabled,
-				alpha_to_one_enable);
-
-			// A problem observed on multiple GPUs is that interior geometry edges can resolve 0 samples unless we force shading rate of 1.
-			// For whatever reason, the way MSAA images are 'resolved' on PS3 bypasses this issue.
-			// NOTE: We do not do image resolve at all, the output is merely 'exploded' and the guest application is responsible for doing the resolve in software as it is on real hardware.
-			properties.state.set_multisample_shading_rate(1.f);
-		}
-
-		return properties;
+		s.renderpass_key = renderpass_key;
+		return s;
 	}
+
 }
 
 VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept : render_backend(ctx, output)
@@ -609,7 +417,27 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 		}
 	);
 
-	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", "v1.95");
+	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", "v1.95",
+		[this](const rsx::rsx_live_state& live, u32 fp_ctrl) -> vk::pipeline_props
+		{
+			return vk::decode_rsx_state_offline(
+				live,
+				m_config,
+				m_device->get_depth_bounds_support(),
+				!!(fp_ctrl & RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING),
+				!!(fp_ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE));
+		},
+		[](const vk::pipeline_props& props) -> rsx::rsx_live_state
+		{
+			return vk::extract_live_state(props);
+		},
+		[this]() -> std::string
+		{
+			// Per-GPU folder key, e.g. "10DE_2206" (NVIDIA / AD102)
+			VkPhysicalDeviceProperties dev_props{};
+			vkGetPhysicalDeviceProperties(static_cast<VkPhysicalDevice>(m_device->gpu()), &dev_props);
+			return fmt::format("%04X_%04X", dev_props.vendorID, dev_props.deviceID);
+		}());
 
 	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
 	{
@@ -1893,17 +1721,33 @@ bool VKGSRender::load_program()
 
 	if (pipeline_state_dirty)
 	{
-		vk::pipeline_props properties = vk::decode_rsx_state(
+		const rsx::rsx_live_state live_state = capture_live_state(
 			m_ctx,
 			vertex_state,
-			res()->surface_cache.m_bound_depth_stencil.second,
-			m_config,
 			static_cast<u8>(m_draw_buffers.size()),
-			u8((m_current_renderpass_key >> 16) & 0xF),
+			m_current_renderpass_key);
+
+		vk::pipeline_props properties = vk::decode_rsx_state_offline(
+			live_state,
+			m_config,
 			m_device->get_depth_bounds_support(),
 			!!(m_ctx->program.fragment_program.ctrl & RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING),
-			!!(m_ctx->program.fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE)
-		);
+			!!(m_ctx->program.fragment_program.ctrl & RSX_SHADER_CONTROL_EMULATE_DEPTH_RANGE));
+
+		// Preserve the ds side-effect of the old live decode (stencil clear hint on the render target)
+		if (auto ds = res()->surface_cache.m_bound_depth_stencil.second; ds && ds->samples() > 1 && !(ds->stencil_init_flags & 0xFF00))
+		{
+			if (properties.state.ds.front.failOp != VK_STENCIL_OP_KEEP ||
+				properties.state.ds.front.depthFailOp != VK_STENCIL_OP_KEEP ||
+				properties.state.ds.front.passOp != VK_STENCIL_OP_KEEP ||
+				properties.state.ds.back.failOp != VK_STENCIL_OP_KEEP ||
+				properties.state.ds.back.depthFailOp != VK_STENCIL_OP_KEEP ||
+				properties.state.ds.back.passOp != VK_STENCIL_OP_KEEP)
+			{
+				// Toggle bit 9 to signal require full bit-wise transfer
+				ds->stencil_init_flags |= (1 << 8);
+			}
+		}
 
 		properties.renderpass_key = m_current_renderpass_key;
 		m_pipeline_properties_ctrl = pipeline_properties_ctrl;

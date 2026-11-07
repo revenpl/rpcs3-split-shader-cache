@@ -72,7 +72,8 @@ namespace utils
 #ifdef _MSC_VER
 		return std::popcount(v.lo) + std::popcount(v.hi);
 #else
-		return std::popcount(v);
+		// std::popcount(__int128) requires a newer libstdc++; the builtins work everywhere on GCC/Clang
+		return __builtin_popcountll(static_cast<u64>(v)) + __builtin_popcountll(static_cast<u64>(v >> 64));
 #endif
 	}
 
@@ -159,7 +160,11 @@ namespace utils
 		else
 			return std::countr_zero(arg.lo);
 #else
-		return std::countr_zero(arg);
+		// std::countr_zero(__int128) requires a newer libstdc++; the builtins work everywhere on GCC/Clang
+		const u64 lo = static_cast<u64>(arg), hi = static_cast<u64>(arg >> 64);
+		if (hi)
+			return __builtin_ctzll(hi) + 64u;
+		return __builtin_ctzll(lo);
 #endif
 	}
 
@@ -171,7 +176,11 @@ namespace utils
 		else
 			return std::countl_zero(arg.lo) + 64;
 #else
-		return std::countl_zero(arg);
+		// std::countl_zero(__int128) requires a newer libstdc++; the builtins work everywhere on GCC/Clang
+		const u64 lo = static_cast<u64>(arg), hi = static_cast<u64>(arg >> 64);
+		if (hi)
+			return __builtin_clzll(hi);
+		return __builtin_clzll(lo) + 64u;
 #endif
 	}
 
