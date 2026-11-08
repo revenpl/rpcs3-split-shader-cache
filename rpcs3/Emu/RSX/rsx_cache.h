@@ -85,6 +85,9 @@ namespace rsx
 		using make_props_t = std::function<pipeline_storage_type(const rsx_live_state&, u32)>;
 		using extract_live_t = std::function<rsx_live_state(const pipeline_storage_type&)>;
 
+		// Guards the read-modify-write cycles on manifest/props; parallel compile workers upsert concurrently
+		std::mutex m_cache_io_mutex;
+
 		make_props_t m_make_props;
 		extract_live_t m_extract_live;
 		std::string device_key;
@@ -253,6 +256,14 @@ namespace rsx
 				{
 					auto& entry = unpacked[pos];
 					m_storage.add_pipeline_entry(std::get<1>(entry), std::get<2>(entry), std::get<0>(entry), std::forward<Args>(args)...);
+
+					// Upsert manifest + device props as soon as this pipeline is linked. Without this the split
+					// cache is only written by the async runtime notify path, so a warm boot that preloads every
+					// pipeline through add_pipeline_entry (allow_notification=false) never refreshes the files.
+					if (g_cfg.video.split_shader_cache)
+					{
+						store(std::get<0>(entry), std::get<1>(entry), std::get<2>(entry));
+					}
 				}
 				// Do not account for an extra shader that was never processed
 				processed--;
@@ -585,6 +596,8 @@ namespace rsx
 
 			if (g_cfg.video.split_shader_cache)
 			{
+				std::lock_guard<std::mutex> io_guard(m_cache_io_mutex);
+
 				// 1) Portable manifest: append if (vp, fp, state) is new
 				std::vector<rsx::cache_files::manifest_record> manifest;
 				const std::string manifest_path = manifest_file_path();
